@@ -223,6 +223,152 @@ means_cpg<-apply(betas_n,2,function(x){return(mean(as.numeric(x),na.rm=T))})
 var_cpg<-apply(betas_n,2,function(x){return(var(as.numeric(x),na.rm=T))})
 plot(unname(means_cpg),var_cpg,col=colorh1)
 
+#
+
+library(HardyWeinberg)
+library(bigsnpr)
+library(bigstatsr)
+library(dplyr)
+
+gwas_samples<-snp_attach("/home/storage/user14/files/t2d_gsa/flp_allelq/maf_allele_recode_samples.rds")
+
+grl<-gwas_samples$fam %>% group_by(family.ID) 
+
+str_l<-group_rows(grl)
+
+
+names(str_l)<-unlist(group_keys(grl),use.names = F)
+
+hwe_max<-function(ind,genot,grow,all_count_thres){
+  
+  gindex<-genot[,ind]
+  
+  chisq_list_ind<-lapply(grow, function(x,gs = gindex,thr = all_count_thres){
+    
+    kl<-apply(gs[x,],2,FUN = function(y){
+      
+      count_t<-table(y);
+      
+      y_cr_chisq<-(-99L)
+      
+      if(length(count_t) == 3){
+        a_allele_count<-((count_t[1]*2+count_t[2])<thr);
+        b_allele_count<-((count_t[3]*2+count_t[2])<thr);
+        if(a_allele_count|b_allele_count){
+          y_cr_chisq<-(-9L)
+        }else{
+          count_t<-as.vector(count_t);
+          names(count_t)<-c("AA","AB","BB");
+          y_cr_chisq<-HardyWeinberg::HWChisq(count_t,verbose = F)$chisq;
+        }
+      }
+      
+      if(length(count_t)==2){
+         
+          n_cou<-names(count_t)
+          rep_name<-dplyr::case_match(n_cou,"0"~"AA","1"~"AB","2"~ "BB")
+          count_t<-as.vector(count_t)
+          names(count_t)<-rep_name
+          len_chk<-dplyr::case_when(is.na(count_t["AA"])~any(c(count_t["AB"]+2*count_t["BB"],count_t["AB"])<thr),
+                    is.na(count_t["BB"])~any(c(count_t["AB"]+2*count_t["AA"],count_t["AB"] )<thr),
+                    is.na(count_t["AB"])~any(c(count_t["AA"],count_t["BB"])<thr))
+          
+          count_t<-dplyr::case_when(is.na(count_t["AA"])~c("AA"=0,count_t),
+                           is.na(count_t["BB"])~c("BB"=0,count_t),
+                           is.na(count_t["AB"])~c("AB"=0,count_t))
+          
+          if(len_chk){
+            y_cr_chisq<-(-8L)
+          }else{
+            y_cr_chisq<-HardyWeinberg::HWChisq(count_t,verbose = F)$chisq;
+          }
+      }
+      
+       return(list(counts1 = count_t, hwe_chisq = y_cr_chisq))})
+    #print(kl)
+    return((kl))
+  })
+  
+  return(do.call(cbind,chisq_list_ind))
+}
+
+options(bigstatsr.check.parallel.blas = FALSE)
+
+res_hwe<-bigstatsr::big_apply(X=gwas_samples$genotypes,
+                                a.FUN = hwe_max,
+                                all_count_thres = 5,
+                                ind = cols_along(gwas_samples$genotypes),
+                                grow = str_l,
+                                ncores = 15,
+                                a.combine = "rbind")
+
+save(res_hwe,file = "hwe_geno_maf_fil.RData")
+
+dev_hwe<-function(x2_groups,number_group,min_x2,atleast_minx2){
+  
+  hwe_diseq<-apply(x2_groups, 1, function(x){
+    x<-sapply(x,function(y){return(y[[2]])})
+    sum_group<-sum(x>=min_x2)
+    max_group<-sum(x>=atleast_minx2)
+    if(sum_group>=number_group&max_group>=1){
+      return(T)
+    }else{
+      return(F)
+    }
+  })
+  return(which(hwe_diseq))
+}
+
+
+diseq<-dev_hwe(x2_groups = res_hwe,number_group = 4, min_x2 = 4, atleast_minx2 = 8)
+
+apply(res_hwe[diseq,],1,unlist,recursive=T,simplify = T)
+
+View(res_hwe[diseq,])
+
+
+snp_stratfrq<-function(gen,ind,fam,map){
+    print(dim(gen[,ind]))
+    mer_gen<-cbind(fam,gen[,ind])
+    print(dim(mer_gen))
+    sum_frq<-mer_gen%>%group_by(family.ID)%>%summarise(across(as.character(1):tail(colnames(mer_gen),1),~mean(.x,na.rm=T)/2))
+    print(dim(sum_frq))
+    all_frq_t<-as_tibble(cbind(nms = names(sum_frq), t(sum_frq)))[,-1]
+    colnames(all_frq_t)<-all_frq_t[1,]
+    all_frq_t<-all_frq_t[-1,]
+    loci_mer_atgc<-cbind(map[ind,],all_frq_t)
+    return(loci_mer_atgc)
+}
+
+
+ran_all_frq<-big_apply(gwas_samples$genotypes,a.FUN = snp_stratfrq,
+    ind  = which(apply(res_hwe,1,function(x){if(any(x==-99)){return(T)}else{FALSE}})),
+    map = gwas_samples$map,
+     fam = gwas_samples$fam)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
