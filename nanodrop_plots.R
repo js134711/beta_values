@@ -345,6 +345,61 @@ ran_all_frq<-big_apply(gwas_samples$genotypes,a.FUN = snp_stratfrq,
     ind  = which(apply(res_hwe,1,function(x){if(any(x==-99)){return(T)}else{FALSE}})),
     map = gwas_samples$map,
      fam = gwas_samples$fam)
+################################################################################################
+#merge r2 value from vcf to plink result
+library(bigstatsr)
+library(bigreadr)
+library(foreach)
+library(stringr)
+library(dplyr)
+vcf_list<-list.files('~/T2D_GWAS',pattern = 'vcf.gz')
+
+lapply(vcf_list,function(x){
+    ofile<- str_replace(x,pattern = ".*(chr\\d+).*",replacement = "\\1")
+    system(glue::glue('bcftools query --format "%CHROM\\t%POS\\t%INFO/R2\\n" {x} >  {ofile}.r2'))
+})
+setwd("~/T2D_GWAS/r2_val")
+r2_file<-list.files(pattern = ".r2")
+
+r2_fbm<-function(x1){
+  fln<-paste0(sample(x = c(letters),size = 8,replace = F),collapse = "")
+  y<-as_FBM(x = x1,backingfile = paste0("./",fln),type = "double")
+  return(y)
+}
+
+fbm_tr_fun<-function(d){
+  chr_num<-str_replace(d,"chr(\\d+).r2","\\1")
+  fbm_files<-big_fread1(file = d,every_nlines = 1e5,.transform = r2_fbm,select = 2:3)
+  return(list(cn = chr_num, fbm = fbm_files))
+}
+
+r2_bind_com<-function(number,input_file,r2_tr){
+  fbm_bds<-r2_tr[[which(vapply(r2_tr, function(x){x[[1]]==number}, FUN.VALUE = logical(1)))]][[2]]
+  input_file$R2<-NA_real_
+  input_file<-input_file[CHR == number]
+  s_r2<-r2_bind_fun(index = 1,z = fbm_bds, res = input_file)
+  return(s_r2)
+}
+
+r2_bind_fun<-function(index,z,res){
+            r2_table<-as.data.table(z[[index]][,])            
+            names(r2_table)<-c("POS","R2")  
+            r2_table<-unique(r2_table,by="POS")
+            res<-res%>%rows_update(r2_table,by = "POS",unmatched = "ignore")          
+            if(!any(is.na(res$R2))){
+                return(res)
+            }else{
+                 res<-try(r2_bind_fun(index+1,z = z,res=res))
+                 return(res)
+            }
+                }
+
+start1<-Sys.time()
+r2_fbm_trsfmd<-foreach(d = r2_file)%do%fbm_tr_fun(d)
+r2_res_fl<-foreach(a = 1:22,.combine = 'rbind')%do%r2_bind_com(number = a, input_file = res_fl,r2_tr = r2_fbm_trsfmd)
+end1<-Sys.time()
+
+end1-start1 #22.00813
 
 
 
