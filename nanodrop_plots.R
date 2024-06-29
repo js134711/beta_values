@@ -400,6 +400,112 @@ r2_res_fl<-foreach(a = 1:22,.combine = 'rbind')%do%r2_bind_com(number = a, input
 end1<-Sys.time()
 
 end1-start1 #22.00813
+inp_c_file<-read_csv("C://Users/Jayasuriya/Desktop/dna_2806_gel.csv",col_types = c("c","d"))
+
+#function for calculation of NFW, DNA and dilution steps needed 
+#no dilution single dilution stepwise dilution 
+
+#concentration is greater than 40 but less than 75 one microliter is taken 
+
+#concentration is greater than 75 but less than 90 two microliters are taken and diluted to 50ng/ul
+
+#concentration is greater than 90 but less than 150 diluted to half and one microliter is taken 
+
+#greater than 150, serial diluted to half and two microliters is normalised to 50 ng 
+sym(names(inp_c_file)[2])->conc_var
+
+mt_inp_c_file<-inp_c_file |> mutate(c_in = case_when(!!conc_var<20~1,
+                                                     !!conc_var>=20&!!conc_var<=40~2,
+                                                     !!conc_var>40&!!conc_var<=75~3,
+                                                     !!conc_var>75~4),
+                                    rn = row_number()) |> 
+  group_by(c_in) |> arrange(c_in,!!conc_var) |> filter(c_in!=1) |> ungroup()
+
+
+dlk_cn<-function(c,concn){
+  
+  if(c == 2){
+    sl<-(-9)
+    dil_cn<-c(concn,0,2,3,1,concn*2,sl)
+  }
+  if(c==3){
+    sl<-(-9)
+    dil_cn<-c(concn,0,1,4,1,concn,sl)
+  }
+  if(c==4&concn<90){
+    sl<-(-9)
+    nvnv<-(concn/25)-2
+    dil_cn<-c(concn,nvnv,2,4,1,50,sl)
+  }
+  if(c==4&concn>90&concn<150){
+    sl<-(-9)
+    dil_cn<-c(concn,1,1,4,1,concn/2,sl)
+  }
+  if(c==4&concn>=150){
+    concn1<-concn/2
+    sl<-99
+    dil_cn_sec<-dlk_cn(4,concn1)[2:6]
+    dil_cn<-c(concn,dil_cn_sec,sl)
+  }
+  return(dil_cn)
+}
+
+gel_md_array<-array(data = rep(0,26*8*number_of_gel),
+                    dim = c(2,13,8,number_of_gel),
+                    dimnames = list(x = c("R1","R2"), y = paste0("sample",1:13),
+                                    z = c("SAMPLE_ID","NDC","DIL_VL","DGL_VL","N_VL","CL_VL","FIN_VL","SRL_DIL"),
+                                    k = paste0("GL_NO:",1:number_of_gel))
+)
+
+for(i in rows_along(mt_inp_c_file)){
+  
+  sample_id<-mt_inp_c_file[i,4,drop=T];
+  
+  concn<-mt_inp_c_file[i,2,drop=T];
+  
+  indn<-mt_inp_c_file[i,3,drop=T];
+  
+  rnum<-ceiling(i/13);
+  
+  gelnum<-floor(i/25)+1;
+  
+  #print(gelnum)
+  
+  if(i>13){
+    i<-i-13
+  }
+  
+  gel_md_array[rnum,i,,gelnum]<-c(sample_id,dlk_cn(indn,concn));
+  
+  print(gel_md_array[rnum,i,,gelnum])
+}
+
+
+labels = apply(apply(aperm(gel_md_array,perm = c(2,1,3,4)) , 3, function(x)x),1,function(x){
+  if(x[1]!=0){
+    print(x[1])
+    x1<-inp_c_file[as.integer(x[1]),,drop = T]
+    print(x[2:8])
+    y1<-paste0(c(x1,x[3:8]),"\n",collapse ="")
+    
+  }else{
+    
+    y1<-""
+    
+  }
+  
+})
+
+xyplot(y~x,cast,
+       scales = list(x = list(at = NULL), y= list(at = NULL)),
+       panel = function(x,y,...){panel.rect(x = x, y = 20, width = 1, height = 5);
+         panel.rect(x = x, y = 6, width = 1, height = 5)
+         panel.text(x = c(x),y = rep(c(20),each=13),labels = c("lambda",labels[1:12]),fontsize = 8)
+         panel.text(x = c(x),y = rep(c(6),each=13),labels = labels[13:26],fontsize = 8)
+       }
+)
+
+
 
 
 
