@@ -506,7 +506,276 @@ xyplot(y~x,cast,
 )
 
 
+library(bigsnpr)
+library(purrr)
+library(data.table)
+library(foreach)
+library(doParallel)
+library(glue)
+library(stringr)
+library(lattice)
+library(rtracklayer)       
+library(GenomicRanges, help, pos = 2, lib.loc = NULL)
 
+
+res_list<-function(path,c){fread(glue::glue("{path}/chr{c}.csv.gz"))}
+
+index_get_meta<-function(chr_mg,ss_lst){              
+                                        res_smch<-chr_mg[!duplicated(chr_mg,by="pos38",fromLast=T),.(chr = Chr,
+                                                pos = pos37,
+                                                a0=purrr::pmap_chr(.l=.(x=REF,y=ALT,z=A1),.f=function(x,y,z){ifelse(x==z,y,x)}),
+                                                a1=A1)]
+                                        tmp1<-imap(ss_lst,~merge_sst(res_t2d = res_smch,summ_stats= .x, prefix = .y))
+                                        tmp11<-keep(tmp1,is.list)
+                                        if(length(tmp11)>0){
+                                            tmp2<-Reduce(function(x,y){merge(x,y,by="Position",all=T)},tmp11)
+                                            return(merge(cbind(chr_mg[!duplicated(chr_mg,by="pos38",fromLast=T),!c("REF","ALT","A1")],"A0"= res_smch[,a0],"A1"= res_smch[,a1]),tmp2,by.x = "pos37",by.y="Position",all=T))
+                                        
+                                        }else{
+                                            return(tmp11)
+                                            }                  
+                                }
+
+merge_sst<-function(res_t2d,summ_stats,prefix){
+    if(prefix == "mult_ans"){clnamestp<- c("Position","SE","PvalAssociation","PvalAncestryCorrelatedHeterogeneity","Ncases","Ncontrols","Neff")}else{clnamestp<-c("Position","SE","Pval","Ncases","Ncontrols","Neff")}
+    merged_22<-summ_stats[,
+                            {                tmp1=tryCatch(expr={snp_match(sumstats = .(chr =Chromsome,pos=Position,a0=NonEffectAllele,a1=EffectAllele,beta=Beta),info_snp = res_t2d,strand_flip=F,return_flip_and_rev = T,match.min.prop = 0)},error=function(e){return(NA)})
+                                             if(is.list(tmp1[1])){tmp2=list(
+                                                    beta=tmp1[,5],
+                                                    #res_index = tmp1[,9],
+                                                    eaf= .SD[tmp1[,6]][,ifelse(tmp1[,8],1-EAF,EAF)],
+                                                    .SD[tmp1[,6]][,clnames,env=list(clnames=as.list(clnamestp))]) }else{tmp2=NA}                                    
+  
+                                       }
+                                                ]
+          if(is.list(merged_22)){clnm<-names(merged_22) 
+               clnm<-setdiff(clnm,"Position")                                          
+               setnames(merged_22,clnm,paste0(prefix,"_",tolower(clnm)),T)
+               return(merged_22)}else{return(NA)}}
+
+
+wrap_meta<-function(c){
+     files_chr_wise<-lapply(c(eur = "./eur_files",sas = "./sas_files", mult_ans = "multians"),res_list,c=c)
+     res_t2d<-sig[Chr==c]
+     return(index_get_meta(chr_mg=res_t2d,ss_lst=files_chr_wise))
+}                        
+setwd("/home/storage/user14/files/t2d_gsa/summary_stat")
+library(readxl)
+loci_multans<-read_xlsx("41586_2024_7019_MOESM3_ESM.xlsx",sheet=25,range="A5:M640",col_names=F)
+loci<-readRDS("loci_boundary.rds")
+names(loci_multans)<-c(names(loci),paste0(rep(c("lead_snp","pos","pval"),times=3),rep(c("_mv","_dia","_glob"),each=3)))
+setDT(loci_multans)
+study_wise_index<-melt(loci_multans, id.vars = c("Locus", "Chr"),measure.vars = patterns("lead_snp_","pos_","pval_"),variable.name="study",value.name=c("rsid","pos","pval"))
+
+get_pos<-function(res_rds=NULL,res_dt,match_vector,froms){
+    #rds path contain the file path for rds file 
+    #postions in match vector to be matched 
+    if(!is.null(res_rds)){
+        res_file<-if(froms){readRDS(res_rds)}else{res_rds}
+        nsnps<-nrow(res_file[[1]])
+        snps_pos<-res_file[[2]][5*((1:nsnps)-1)+1]
+        matched_indx<-which(snps_pos%in%match_vector[-c(1)])
+        pvalue_from_res<-res_file[[2]][(5*(matched_indx-1)+1),,drop=F]
+        attr(pvalue_from_res,"dimnames")<-list(NULL,c("pos","wgen_or","wgen_beta_se","wgen_zstat","wgen_pval"))
+        res_loci<-as.data.table(cbind(res_file[[1]][matched_indx,],pvalue_from_res))     
+     
+    }else{
+        cs<-match_vector[1]
+        pos_s<-match_vector[-c(1)]
+        res_loci<-res_dt[`#CHROM`==cs&POS%in%pos_s]
+        res_loci[,`:=`(TEST=NULL,OBS_CT=NULL)]
+        res_loci[,`:=`(L95=NULL,U95=NULL)]
+        setnames(res_loci,names(res_loci),c("Chr","pos38","id","REF","ALT","A1","wgen_or","wgen_beta_se","wgen_zstat","wgen_pval"))
+
+
+    }
+     return(res_loci)
+
+}
+pos_list_chrwise<-study_wise_index[,.(index_variant_pos=list(c(chr = unique(Chr) , pos = unique(na.omit(pos38))))),by=Chr]
+pos_list_chrwise[,res:=list(purrr::map(index_variant_pos,function(x){get_pos(glue::glue("/home/storage/user14/files/backing_file/chr{x[1]}_2.TRAIT.glm.logistic.hybrid.rds"),x,T)}))]
+index_res_table_locusk<-study_wise_index[!is.na(rsid)][!duplicated(pos38)][pos_list_chrwise[,res[[1]],by=Chr],on=.(Chr=Chr,pos38=pos)]
+setnames(index_res_table_locusk,"pos","pos37",T)
+setkey(index_res_table_locusk,Locus,pos38,pos37)
+
+clust <- makeCluster(8) 
+clusterExport(cl=clust,varlist=c("merge_sst","res_list","sig","index_get_meta"),envir=.GlobalEnv)
+doParallel::registerDoParallel(clust)
+
+foreach(i = 1:22,
+        .packages = c("data.table","purrr","bigsnpr"),
+        .verbose=T,
+        .errorhandling = "pass") %dopar% {wrap_meta(c=i)} -> res_meta_index1
+
+stopCluster(clust)
+fwrite(res_meta_index1,"res_meta.csv")
+
+
+#ld var 0.6
+lst_index<-study_wise_index[,.(index_variants=list(.SD)),by=Locus]
+
+ldsnps_topld<-function(gene_name,index_variant_dt,indictr){
+    paste0("~/user14/files/t2d_gsa/summary_stat/ld_index/",gsub(" ","",gene_name),c("info","ld"),".txt")->lociname
+    if(indictr){
+            tmpfile<-tempfile(tmpdir="~/user14/files/t2d_gsa/summary_stat/rtemp_files",fileext=".txt")
+            writeLines(unique(index_variant_dt[!is.na(rsid),paste0("chr",Chr,":",pos38)]),tmpfile,sep="\n")
+            system(glue::glue("~/user14/softwares/topld_api/topld_api"," -inFile {tmpfile}", " -outputInfo {lociname[1]}"," -outputLD {lociname[2]}", " -pop EUR", " -thres 0.6"))
+    }
+    ldsnps_06<-fread(lociname[2],select=c(2:5,7,9,11,14,12),col.names=c("query_pos","target_pos","r2","dprime","target_rsid","target_maf","target_ref","target_alt","sign"))
+    ldsnps_06_list<-split(ldsnps_06,by="query_pos")
+    return(ldsnps_06_list)
+}
+
+lst_index[,ldvar:=list(purrr::pmap(.l=.(x=Locus,y=index_variants),function(x,y)ldsnps_topld(x,y,F)))]
+
+rds_list<-lapply(1:22,function(x){k<-readRDS(glue::glue("/home/storage/user14/files/backing_file/chr{x}_2.TRAIT.glm.logistic.hybrid.rds"));return(k)})
+
+lst_index_ld_res<-lst_index[,.(chr_pos=list(c(
+              Chr=unique(na.omit(index_variants[[1]][,Chr])),
+              pos=unique(na.omit(index_variants[[1]][,pos38])))),ldvar),by=Locus][,list(purrr::pmap(.(x=chr_pos,y=ldvar),function(x,y,rds=rds_list){
+                ld_list_res<-lapply(y,function(k,chr=x[1],rds1=rds[[x[1]]]){get_pos(NULL,resf,c(chr,k[[2]]),F)})
+                #names(ld_list_res)<-as.character(x[-c(1)])
+                return(ld_list_res)
+                 }
+                )),by=Locus]
+
+
+lst_index<-lst_index[lst_index_ld_res,on="Locus"]
+#lst_index<-lst_index[loci_multans[,c(1:2)],on="Locus"]
+setnames(lst_index,"V1","ldvar_res",T)
+rtracklayer::import.chain('hg38ToHg19.over.chain')->C
+
+for(i in 1:22){
+    files_chr_wise<-lapply(c(eur = "./eur_files",sas = "./sas_files", mult_ans = "multians"),res_list,c=i)
+    lst_index[Chr==i,`:=`(chr_mrg_res=purrr::pmap(.(x=Chr,y=ldvar_res),function(x,y,ss_lst=files_chr_wise){                    
+                    ld_list_res<-lapply(y,function(k,chr=x){
+                        while(nrow(k)>0){
+                                chr_mg<-as.data.table(merge(x=list(Chr=chr),y=k))
+                                lfted<-chr_mg[,as.data.table(rtracklayer::liftOver(GRanges(Rle(paste0("chr",Chr)),IRanges(start=pos38,width=1),score = pos38),C))][,.(pos37=start,pos38=score)]
+                                chr_mg<-lfted[chr_mg,nomatch=0,on=.(pos38=pos38)]   
+                                res_smch<-chr_mg[!duplicated(chr_mg,by="pos38",fromLast=T),.(chr = Chr,
+                                        pos = pos37,
+                                        a0=purrr::pmap_chr(.l=.(x=REF,y=ALT,z=A1),.f=function(x,y,z){ifelse(x==z,y,x)}),
+                                        a1=A1)]
+                                tmp1<-imap(ss_lst,~merge_sst(res_t2d = res_smch,summ_stats= .x, prefix = .y))
+                                tmp11<-keep(tmp1,is.list)
+                                if(length(tmp11)>0){
+                                    tmp2<-Reduce(function(x,y){merge(x,y,by="Position")},tmp11)
+                                    return(merge(cbind(chr_mg[!duplicated(chr_mg,by="pos38",fromLast=T),!c("REF","ALT","A1")],"A0"= res_smch[,a0],"A1"= res_smch[,a1]),tmp2,by.x = "pos37",by.y="Position",all=T))
+                                
+                                }else{
+                                    return(tmp11)
+                                    }                  
+                            }
+                        })
+                    return(ld_list_res)
+                    }
+                    )),by=Locus]
+                }
+lst_index[,.I[nrow(rbindlist(chr_mrg_res[[1]]))==0],by=Locus][!is.na(V1),V1]->locus_no_ld_res
+loci_merged<-rbindlist(lapply(1:594, function(i)lst_index[-c(locus_no_ld_res),][i,rbindlist(chr_mrg_res[[1]]),by=Locus]))
+loci_merged<-loci_merged[!duplicated(loci_merged,by=c("Chr","pos38"))]
+
+saveRDS(lst_index,"sas_lst_res.rds")
+setkey(loci_merged,Locus,Chr,pos38,pos37)
+
+#######################################
+lst_ld<-lst_index[,.(merged_ld_res=list(imap(ldvar[[1]],~merge(x = .x,y = ldvar_res[[1]][[.y]],by.x =c("target_pos","target_rsid"),by.y=c("pos","ID"))))),by=.(Chr,Locus)]
+ld_res_table_locusk<-lst_ld[,rbindlist(merged_ld_res[[1]]),by=.(Chr,Locus)]
+setnames(ld_res_table_locusk,"target_pos","pos38",T)
+setkey(ld_res_table_locusk,Locus,Chr,query_pos,pos38)
+
+
+library(purrr, help, pos = 2, lib.loc = NULL)
+find_comp<-function(x){
+  c("A","T","G","C")->d1
+  c("T","A","C","G")->d2
+  y<-d2[which(d1%in%x)]
+  return(y)  
+}
+std_f<-function(a1,a2,testa,testb,x){
+  kl<-fcase(testa==a1&testb==a2,x,
+                testa==a2&testb==a1,-x,
+                find_comp(testa) == a1&find_comp(testb)==a2,x,
+                find_comp(testb)==a2&find_comp(testa)==a1,-x,
+                default=NA_real_)
+  return(kl)
+}
+##index_var_table
+##1050 var with res
+index_res_table_locusk<-study_wise_index[!is.na(rsid)][!duplicated(pos38)][pos_list_chrwise[,res[[1]],by=Chr],on=.(Chr=Chr,pos38=pos38)]
+
+study_wise_index[!is.na(rsid)][!duplicated(pos38)][,.N,by=.(study)]
+
+setnames(index_res_table_locusk,"pos","pos37",T)
+
+setkey(index_res_table_locusk,Locus,pos38,pos37)
+
+study_wise_index[study=="global_t2d"][!is.na(rsid)][pos_list_chrwise[,res[[1]],by=Chr],nomatch=NULL,on=.(Chr=Chr,pos38=pos38)]
+
+##ld_indexvar_table
+#0.6 ld with res
+lst_index[,.(list(names(ldvar[[1]])),list(names(ldvar_res[[1]]))),Locus][,all.equal(V1,V2)]
+lst_ld<-lst_index[,.(merged_ld_res=list(imap(ldvar[[1]],~merge(x = .x,y = ldvar_res[[1]][[.y]],by.x =c("target_pos","target_rsid"),by.y=c("pos","ID"))))),by=.(Chr,Locus)]
+ld_res_table_locusk<-lst_ld[,rbindlist(merged_ld_res[[1]]),by=.(Chr,Locus)]
+setnames(ld_res_table_locusk,"target_pos","pos38",T)
+setkey(ld_res_table_locusk,Locus,Chr,query_pos,pos38)
+#number check
+ld_res_table_locusk[,.N]
+lst_index[,rbindlist(ldvar_res[[1]]),by=Locus][,.N]
+
+index_res_table_locusk[Chr==1]
+##
+#res with index and meta
+clust <- makeCluster(8) 
+clusterExport(cl=clust,varlist=c("merge_sst","res_list","index_res_table_locusk","index_get_meta"),envir=.GlobalEnv)
+doParallel::registerDoParallel(clust)
+
+foreach(i = 1:22,
+        .packages = c("data.table","purrr","bigsnpr"),
+        .verbose=T,
+        .errorhandling = "pass") %dopar% {wrap_meta(c=i)} -> res_meta_index1
+
+stopCluster(clust)
+
+
+##
+res_meta_index1<-rbindlist(res_meta_index1)
+setkey(res_meta_index1,Locus,pos38,pos37)
+ld_res_table_locusk[res_meta_index1[res_meta_index1[,.I[is.na(sas_pval)]],.(Locus,Chr,pos38)]]
+
+ld_res_table_locusk[,`:=`(a0=purrr::pmap_chr(.l=.(x=REF,y=ALT,z=A1),.f=function(x,y,z){ifelse(x==z,y,x)}),REF=NULL,ALT=NULL,A1=NULL,a1=A1)]
+
+ld_res_table_locusk[,`:=`(r2_signed=pmap_dbl(.l=.(a0,a1,target_ref,target_alt,ifelse(sign=="+",r2,-r2)),std_f))]
+
+res_meta_index1[duplicated(res_meta_index1,by="pos37")]
+#res_meta_index1~index variants and their results ~ key(Locus,pos38,pos37)
+#ld_res_table_locusk ~ ld variants r2 and res merged ~ key(Locus,Chr,query_pos,pos38)
+#loci_merged ~ ld variants merged with results and meta ~ key(Locus,Chr,pos38,pos37)
+#index, ld with minimum p value in wellgen, ld difference between eur and sas 
+
+ld_res_table_locusk[res_meta_index1[.("TCF7L2",unique(pos38),114758349),.(Locus,Chr,pos38),nomatch=0]][order(pos38),levelplot(r2_signed~as.factor(pos38)*as.factor(pos38),col.regions=topo.colors(5),
+                                                                                                       shrink=c(0.5,1),scales = list(x= list(rot=90)),at=pretty(c(0.6,1),4),
+                                                                                                       colkey=list(at = pretty(c(0.6,1),4)))]
+
+loci_merged[ld_res_table_locusk[res_meta_index1[61,.(Locus,Chr,pos38),nomatch=NULL]][,.(Locus,Chr,pos38)],nomatch=0][,
+    .(sapply(.SD,function(x){-log10(as.numeric(x))}),pos38),.SDcols = c("wgen_pval","sas_pval","eur_pval")][,
+    xyplot(wgen_pval+sas_pval+as.numeric(eur_pval)~pos38,cex=3,type=c("g","p"),pch=c(18,19,20),key=list(points = list(pch=c(18,19,20)),columns=3))]
+
+
+ld_res_table_locusk[res_meta_index1[.("TCF7L2",unique(pos38),114758349),.(Locus,Chr,pos38),nomatch=0]][order(wgen_pval),.SD[1],by=.(r2_signed>0.9,r2_signed>0.8)]
+
+ld_res_table_locusk[res_meta_index1[61,.(Locus,Chr,pos38),nomatch=NULL]][
+    order(pos38),
+    xyplot(-log10(wgen_pval)+I(max(-log10(wgen_pval))+r2_signed)~pos38-112998590,
+    cex=3,type=c("p","p","g"),distribute.type=T,pch=c(18,19),
+    par.settings = list(reference.line = list(col="darkgrey",alpha=1,lwd=1)))]
+
+cls<-c("Chr","ID","A1_FREQ","wgen_or","wgen_pval","sas_eaf","sas_beta","sas_pval","eur_eaf","eur_beta","eur_pval","mult_ans_pvalancestrycorrelatedheterogeneity")
+
+loci_merged[ld_res_table_locusk[res_meta_index1[17,.(Locus,Chr,pos38)],nomatch=NULL][,.(Locus,Chr,pos38)],nomatch=NULL][c(unique(sapply(list(wgen_pval,sas_pval,eur_pval),which.min))),.SD,.SDcols=cls]
+
+fwrite(res_meta_index1,"res_meta.csv")
 
 
 
