@@ -779,6 +779,210 @@ fwrite(res_meta_index1,"res_meta.csv")
 
 
 
+library(bigsnpr)
+library(bigreadr)
+library(data.table)
+library(Matrix)
+library(doParallel)
+library(tracklayer)
+library(collapse)
+install.packages("logr")
+library(logr)
+install.packages("collapse")
+chr5<-fread(input="./multians/chr5.csv.gz",nThread = 8)
+#chr,pos37,pos38,a0,a1,a1frq,beta,se,ncase,ncontrol,neff
+
+res_chr5<-resf[`#CHROM`==5]
+rs5lfted<-res_chr5[,as.data.table(rtracklayer::liftOver(GRanges(Rle(paste0("chr",`#CHROM`)),IRanges(start=POS,width=1),score = POS),C))][,.(pos37=start,pos38=score)]
+res_chr5<-merge(res_chr5,rs5lfted,by.x = "POS",by.y="pos38",all.x=T)
+mrgd_res<-res_chr5[chr5,on=.(pos37=Position),nomatch = NULL]#384890
+
+
+setwd("C:/user14/t2d/bfiles/")
+
+geno_hg38<-snp_attach("sorted_hg38_bf.rds")
+
+imput_mis<-snp_fastImputeSimple(geno_hg38$genotypes,method = "mean0")
+
+ind.rows1k<-sample.int( n = 5877,size = 1000)
+ind.cols<-sample.int(n=dim(imput_mis)[2],size = 1e5)
+ind.rows1k<-ind.rows1k[order(ind.rows1k)]
+ind.cols<-ind.cols[order(ind.cols)]
+
+
+chr1_ind<-which(geno_hg38$map$chromosome==1)
+
+ind_s_chr1<-ind.cols[(ind.cols%in%chr1_ind)]
+
+
+m1<-snp_cor(imput_mis,
+        ind.row = ind.rows1k,
+        ind.col = ind_s_chr1,
+        size    = 500,
+        infos.pos = geno_hg38$map$physical.pos[ind_s_chr1]
+        )
+
+#sparsity
+length(m@x)/m@Dim[1]/m@Dim[2]
+
+setorder(ldmatrix,SNP1,SNP2)
+
+m <- Matrix(nrow = length(keyld), ncol = length(keyld), data = 0, sparse = TRUE)
+
+#m <- as(m, "CsparseMatrix")
+m <- as(m, "symmetricMatrix")
+
+keyld<-ldmatrix[,{
+  tmp1<-unique(c(SNP1,SNP2))
+  tmp2<-tmp1[order(tmp1)]
+}]
+
+ldmatrix[,`:=`(key1=match(SNP1,keyld),key2=match(SNP2,keyld))]
+cl <- makeCluster(detectCores() - 1)  
+registerDoParallel(cl)
+
+for(i in seq_len(dim(ldmatrix)[1])){
+  ind1<-ldmatrix[i,key1];
+  ind2<-ldmatrix[i,key2];
+  m[ind1,ind2]<-ldmatrix[i,R2]
+}
+#https://link.springer.com/article/10.1186/s12859-018-2289-9
+corr<-as_SFBM(spmat = m, "./test_1e4")
+
+ldmatrix[duplicated(ldmatrix,by=c("SNP1","SNP2"))|duplicated(ldmatrix,by=c("SNP1","SNP2"),fromLast=T)]
+
+info<-fread("c://user14//ldfiles//sas//infochr1.csv.gz",nThread = 8,select = 1:5)
+summ_stat_chr1<-fread("./sas_fls/chr1.csv.gz")
+setkeyv(summ_stat_chr1,"Position")
+# saveRDS(resf,"t2d_res_new.rds")
+# rm(resf)
+#########################################################
+      #                                           #
+      #               LIFTOVER START              #        
+c1938<-import.chain("./GRCh37_to_GRCh38.chain")
+
+lf<-log_open("chr1_liftover")
+
+lfted<-summ_stat_chr1[,as.data.table(rtracklayer::liftOver(GRanges(Rle(paste0("chr",Chromsome)),IRanges(start=Position,width=1),score = Position),C1))][,.(pos38=start,pos37=score)]
+summ_stat_chr1<-merge(summ_stat_chr1,lfted,by.x = "Position",by.y="pos37",all.x=T)
+summ_stat_chr1[is.na(pos38),.N]
+summ_stat_chr1[(duplicated(pos38,incomparables = NA)|duplicated(pos38,incomparables = NA,fromLast=T))]
+
+
+function(chr_num,to_build,input_genome_build,input_dt,lfted_dt,posColName){
+  
+  s0<-paste0("Chromosome = ", chr_num)
+  s1<-paste0("Number of positions given = ", nrow(input_dt))
+  dp_rows_count<-input_dt[duplicated(pos),env = list(pos = posColName)]
+  s2<-paste0("No of duplicate rows in input = ", dp_rows_count)
+
+  
+}
+
+#                                           #
+#               LIFTOVER END                # 
+
+##########################################################
+
+indx_ldinfo<-match(summ_stat_chr1$pos38,info$Position)
+
+
+mtched_pos_ld<-info[na.omit(indx_ldinfo),Position]
+
+ldmatrix<-fread("c://user14//ldfiles//sas_ld_chr1.csv.gz",select=1:5,nThread = 8)
+
+
+fmatch(summ_stat_chr1$pos38,ldmatrix$SNP1)->s1m
+fmatch(summ_stat_chr1$pos38,ldmatrix$SNP2)->s2m
+intersect(na.omit(s1m),na.omit(s2m))->ld_match_matrix
+ss(x = ldmatrix,i=ld_match_matrix)->ld_matrix_subset
+
+#farthest non zero value in matrix/data.frame
+
+res_chr1<-fread("./chr1.T2D.glm.logistic.hybrid",nThread = 8,select = c(1,2,3,4,5,7,9,12,16,17,19))
+setnames(res_chr1,names(res_chr1)[1],"CHR",T)
+
+summ_stat_chr1<-summ_stat_chr1[!is.na(pos38)]
+names(summ_stat_chr1)
+
+allele_match<-snp_match(sumstats = summ_stat_chr1[,.(chr=Chromsome,pos=pos38,a0=NonEffectAllele,a1=EffectAllele,beta=Beta,beta_se=SE,n_eff=Neff)],
+          info_snp = res_chr1[,.(chr=CHR,pos=POS,a0=fcase(A1==REF,ALT,is.na(A1),NA,default=REF),a1=A1)],
+          strand_flip = F,
+          return_flip_and_rev = T,
+          match.min.prop = 0,
+          remove_dups = T)
+
+fmatch(allele_match$pos,ldmatrix$SNP1)->s1m
+fmatch(allele_match$pos,ldmatrix$SNP2)->s2m
+intersect(na.omit(s1m),na.omit(s2m))->ld_match_matrix
+ss(x = ldmatrix,i=ld_match_matrix)->ld_matrix_subset
+
+
+
+setorder(ld_matrix_subset,SNP1,SNP2)
+
+
+m <- Matrix(nrow = length(allele_match$pos), ncol = length(allele_match$pos), data = 0, sparse = TRUE)
+
+#m <- as(m, "CsparseMatrix")
+m <- as(m, "symmetricMatrix")
+
+ld_matrix_subset[,`:=`(key1=match(SNP1,allele_match$pos),key2=match(SNP2,allele_match$pos))]
+
+for(i in seq_len(dim(ld_matrix_subset)[1])){
+  ind1<-ld_matrix_subset[i,key1];
+  ind2<-ld_matrix_subset[i,key2];
+  m[ind1,ind2]<-ld_matrix_subset[i,R2]
+}
+
+
+corr_chr1<-as_SFBM(m,"chr1",compact = T)
+
+
+
+df_beta <- info_snp[,c("beta", "beta_se", "n_eff", "_NUM_ID_")]
+
+
+ldsc <- snp_ldsc(colSums(m), 
+                    nrow(m)-1e6, 
+                    chi2 = (allele_match$beta / allele_match$beta_se)^2,
+                    sample_size = allele_match$n_eff, 
+                    blocks = NULL)
+
+h2_est <- ldsc[["h2"]]
+
+h2_est
+
+p_seq <- signif(seq_log(1e-4, 1, length.out = 17), 2)
+h2_seq <- round(2.5 * c(0.7, 1, 1.4), 4)
+grid.param <-
+  expand.grid(p = p_seq,
+              h2 = h2_seq,
+              sparse = c(FALSE, TRUE))
+# Get adjusted beta from grid model
+beta_grid <-
+  snp_ldpred2_grid(corr_chr1, allele_match, grid.param)
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
