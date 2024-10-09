@@ -965,28 +965,28 @@ beta_grid <-
   
 
 
-xyplot(wgen_pval+sas_pval+as.numeric(eur_pval)+mult_ans_pvalassociation~pos38,
-       subset=!is.na("eur_beta"),type=c("p"),cex=0.8,
-       data = res_locus[order(pos38)],
-       scales=list(y=list(log=10)),
-       key = list(rep=F,text = list(c("wgen","sas","eur","mans"), adj = 1,cex=0.8),
-                  points = list(pch=c(15:17,13),col="black",cex=0.8),
-                  #text = list(levels(gpl), adj = 1),
-                  #rectangles = list(pch=19,col=cls_pval,cex=0.5),
-                  space="top",columns=2
-                  ),
+
+x1<-xyplot(wgen_pval+eur_pval+mu_pval~pos,
+       type=c("b","g"),cex=0.25,
+       data = df1,
+       scales=list(y=list(log=10),tck=c(1,0)),
        ylab="log(p-value)",xlab="",
        panel = function(x,y,...){
-         panel.superpose(x,y,col=cls_r2,pch=c(15:17,13),...);
+         panel.superpose(x,y,col=cls_pval,pch=c(15:17),lty=list(1,4,5),...);
          panel.abline(v = posrefsnp,lty="dotdash",col="darkgrey");
          panel.abline(h = c(-2,-8),lty="dotted",col="darkgrey");
-         panel.text(x = posrefsnp,y=-9,labels=refsnpid,cex=0.6)},
+	    panel.text(x = posrefsnp,y=-9,labels=refsnpid,cex=0.6)},
        main=paste0(c(locus_name,stid),collapse = "~"),
        legend=list(right =
                      list(fun = draw.colorkey,
-                          args = list(key = list(col = cls_pval,
-                                                 at = col_at ,height=0.2,width=0.6,labels=list(at=col_at,cex=0.7))))),
+                          args = list(key = list(col = cols,
+                                                 at = cols_at ,
+										 height=0.2,width=0.6,
+										 labels=list(at=cols_at,cex=0.7))))),
        par.settings=list(par.main.text=list(cex=0.9)))
+
+
+direct.label(x1)
 
 
 print(pls1,split=c(2,1,2,2),more=T)
