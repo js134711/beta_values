@@ -992,6 +992,64 @@ direct.label(x1)
 print(pls1,split=c(2,1,2,2),more=T)
 
 
+library(glue)
+library(SAIGE)
+library(purrr)
+
+setwd("~/user14/files/t2d_gsa/flp_allelq/plink2_pca_2006/binaryfiles/binfiles/manifestmtch")
+
+input_bfile_nomaf<-file.path(setwd(),"sorted_hg38_bf")
+
+extract_file_lowfreqvar<-file.path(getwd(),"king_cutoff_saige/mac_less_than_558.txt")
+
+indep_variants<-c("5000kb_0.01_27.998K.txt","10000kb_0.01_54.516K.txt","20000kb_0.01_111.982K.txt","50000kb_0.01_222.781K.txt")
+
+phenotype_filename<-file.path("~/T2D_GWAS/typed_var_list","pheno_nona.cvr")
+
+dir_path_for_bfiles<-file.path(getwd(),"bfiles_grm_variants")
+
+na_pheno_rem<-file.path(getwd(),"na_ids_to_exclude_pheno_23_10_24.txt")
+
+if (!dir.exists(dir_path_for_bfiles)) {dir.create(dir_path_for_bfiles)}
+
+output_plink_file_name <- paste0(
+                                file.path(dir_path_for_bfiles,
+                                 gsub(".txt","",indep_variants)),
+                                 "_",
+                                 Sys.Date()
+                                 )
+
+system(glue("plink2 --bfile {input_bfile_nomaf}",
+        " --extract {extract_file_1} {extract_file_2}",
+        " --make-bed",
+        " --out {output_plink_file_name}"))
+
+
+system()
+
+Rscript step1_fitNULLGLMM.R \
+        --plinkFile=./input/nfam_100_nindep_0_step1_includeMoreRareVariants_poly \
+        --phenoFile=./input/pheno_1000samples.txt_withdosages_withBothTraitTypes.txt \
+        --phenoCol=y_binary \
+        --covarColList=x1,x2 \
+        --sampleIDColinphenoFile=IID \
+        --traitType=binary \
+        --outputPrefix=./output/example_binary_includenonAutoforvarRatio \
+        --nThreads=4\
+	    --LOCO=FALSE\
+	    --minMAFforGRM=0.01
+
+pkgs<-c("magrittr","readxl","data.table")
+
+invisible(lapply(pkgs, require, character.only = TRUE))
+
+pheno_no_na<-fread("/home/storage/T2D_GWAS/typed_var_list/pheno_nona.cvr")
+
+fam_file_complete_ids<-fread("sorted_hg38_bf.fam")
+
+fwrite(list(setdiff(fam_file_complete_ids$V2,pheno_no_na$IID)),"na_ids_to_exclude_pheno_23_10_24.txt",col.names=F,quote=F)
+
+
 
 
 
